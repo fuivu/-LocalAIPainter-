@@ -1,99 +1,147 @@
 #!/bin/bash
 # ============================================================
-#  Local AI Painter v3.0 — Gradle Wrapper 安装脚本
-#  将已下载的 gradle-8.7-bin.zip 中的 gradle-wrapper.jar
-#  提取到项目的 gradle/wrapper/ 目录
+#  install-wrapper.sh
+#  自动安装 gradle-wrapper.jar + 验证 Gradle 9.3.1 环境
+#  适用于 Termux / Linux / macOS
 # ============================================================
 
 set -e
 
-PROJECT_ROOT="$(cd "$(dirname "$0")" && pwd)"
-WRAPPER_DIR="${PROJECT_ROOT}/gradle/wrapper"
-TARGET_JAR="${WRAPPER_DIR}/gradle-wrapper.jar"
-
-# 颜色
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
-
-echo -e "${BLUE}══════════════════════════════════════════${NC}"
-echo -e "${BLUE}  Local AI Painter v3.0 — Wrapper 安装器${NC}"
-echo -e "${BLUE}══════════════════════════════════════════${NC}"
+echo "============================================"
+echo "  Local AI Painter v3.7 — Wrapper Installer"
+echo "============================================"
 echo ""
 
-# 1. 查找用户已下载的 gradle zip
-echo -e "${YELLOW}[1/4]${NC} 查找 Gradle 8.7 压缩包..."
-GRADLE_ZIP=""
-SEARCH_PATHS=(
-    "${PROJECT_ROOT}/gradle-8.7-bin.zip"
-    "${PROJECT_ROOT}/../gradle-8.7-bin.zip"
-    "${HOME}/Downloads/gradle-8.7-bin.zip"
-    "${HOME}/Desktop/gradle-8.7-bin.zip"
-    "${HOME}/gradle-8.7-bin.zip"
-)
+PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
+WRAPPER_DIR="$PROJECT_DIR/gradle/wrapper"
+JAR_PATH="$WRAPPER_DIR/gradle-wrapper.jar"
+PROPS_PATH="$WRAPPER_DIR/gradle-wrapper.properties"
 
-for p in "${SEARCH_PATHS[@]}"; do
-    if [ -f "$p" ]; then
-        GRADLE_ZIP="$p"
-        echo -e "      找到: ${GREEN}${GRADLE_ZIP}${NC}"
-        break
+# 1. 检查 gradle-wrapper.properties
+echo "📋 [1/4] 检查 gradle-wrapper.properties..."
+if [ -f "$PROPS_PATH" ]; then
+    echo "   ✅ 已存在: $PROPS_PATH"
+    cat "$PROPS_PATH"
+    echo ""
+else
+    echo "   ❌ 不存在，创建默认配置..."
+    mkdir -p "$WRAPPER_DIR"
+    cat > "$PROPS_PATH" << 'EOF'
+distributionBase=GRADLE_USER_HOME
+distributionPath=wrapper/dists
+distributionUrl=https\://services.gradle.org/distributions/gradle-9.3.1-bin.zip
+zipStoreBase=GRADLE_USER_HOME
+zipStorePath=wrapper/dists
+EOF
+    echo "   ✅ 已创建"
+fi
+
+# 2. 检查 gradle-wrapper.jar
+echo ""
+echo "📦 [2/4] 检查 gradle-wrapper.jar..."
+if [ -f "$JAR_PATH" ] && [ -s "$JAR_PATH" ]; then
+    SIZE=$(stat -c%s "$JAR_PATH" 2>/dev/null || stat -f%z "$JAR_PATH" 2>/dev/null)
+    echo "   ✅ 已存在: $JAR_PATH (${SIZE} bytes)"
+else
+    echo "   ⚠️  不存在或为空，尝试自动下载..."
+    
+    # 方法 A：从 Gradle 9.3.1 发行包中提取
+    TMP_DIR=$(mktemp -d)
+    ZIP_PATH="$TMP_DIR/gradle-9.3.1-bin.zip"
+    
+    echo "   📥 下载 Gradle 9.3.1 (约 140MB)..."
+    if command -v curl >/dev/null 2>&1; then
+        curl -L -o "$ZIP_PATH" "https://services.gradle.org/distributions/gradle-9.3.1-bin.zip" || true
+    elif command -v wget >/dev/null 2>&1; then
+        wget -O "$ZIP_PATH" "https://services.gradle.org/distributions/gradle-9.3.1-bin.zip" || true
     fi
-done
-
-# 如果没找到，提示用户手动指定
-if [ -z "$GRADLE_ZIP" ]; then
-    echo -e "      ${RED}未自动找到 gradle-8.7-bin.zip${NC}"
-    echo ""
-    echo "请通过以下方式之一提供："
-    echo "  a) 将 gradle-8.7-bin.zip 放到项目根目录"
-    echo "  b) 设置环境变量：export GRADLE_ZIP=/path/to/gradle-8.7-bin.zip"
-    echo "  c) 手动运行：unzip -j gradle-8.7-bin.zip '*/gradle-wrapper.jar' -d gradle/wrapper/"
-    echo ""
-    if [ -n "$GRADLE_ZIP_ENV" ]; then
-        GRADLE_ZIP="$GRADLE_ZIP_ENV"
+    
+    if [ -f "$ZIP_PATH" ] && [ -s "$ZIP_PATH" ]; then
+        echo "   📂 解压提取 gradle-wrapper.jar..."
+        unzip -o "$ZIP_PATH" "gradle-9.3.1/lib/plugins/gradle-wrapper-*.jar" -d "$TMP_DIR/" 2>/dev/null || true
+        
+        # 从 wrapper jar 中提取 gradle-wrapper.jar
+        WRAPPER_PLUGIN=$(find "$TMP_DIR" -name "gradle-wrapper-*.jar" | head -1)
+        if [ -n "$WRAPPER_PLUGIN" ]; then
+            mkdir -p "$TMP_DIR/extract"
+            unzip -o "$WRAPPER_PLUGIN" "gradle-wrapper.jar" -d "$TMP_DIR/extract/" 2>/dev/null || true
+            if [ -f "$TMP_DIR/extract/gradle-wrapper.jar" ]; then
+                cp "$TMP_DIR/extract/gradle-wrapper.jar" "$JAR_PATH"
+                echo "   ✅ 提取成功: $JAR_PATH"
+            fi
+        fi
+    fi
+    
+    # 方法 B：如果从发行包提取失败，尝试直接下载（备用）
+    if [ ! -f "$JAR_PATH" ] || [ ! -s "$JAR_PATH" ]; then
+        echo "   📥 备用方案：直接下载 gradle-wrapper.jar..."
+        # 从 GitHub 上的 Gradle 源码仓库获取
+        GITHUB_URL="https://raw.githubusercontent.com/gradle/gradle/v9.3.1/gradle/wrapper/gradle-wrapper.jar"
+        if command -v curl >/dev/null 2>&1; then
+            curl -L -o "$JAR_PATH" "$GITHUB_URL" 2>/dev/null || true
+        elif command -v wget >/dev/null 2>&1; then
+            wget -O "$JAR_PATH" "$GITHUB_URL" 2>/dev/null || true
+        fi
+    fi
+    
+    # 清理临时文件
+    rm -rf "$TMP_DIR"
+    
+    if [ -f "$JAR_PATH" ] && [ -s "$JAR_PATH" ]; then
+        SIZE=$(stat -c%s "$JAR_PATH" 2>/dev/null || stat -f%z "$JAR_PATH" 2>/dev/null)
+        echo "   ✅ gradle-wrapper.jar 就绪 (${SIZE} bytes)"
     else
-        exit 1
+        echo "   ❌ 自动下载失败，请手动放置文件："
+        echo "      将 gradle-wrapper.jar 复制到:"
+        echo "      $JAR_PATH"
+        echo ""
+        echo "   手动获取方式："
+        echo "   1. 从任何 Gradle 9.x 项目的 gradle/wrapper/ 目录复制"
+        echo "   2. 或从 Local Dream 项目的同一位置复制"
+        echo "   3. 或从电脑上运行: gradle wrapper --gradle-version 9.3.1"
     fi
 fi
 
-# 2. 确保目录存在
+# 3. 检查 gradlew
 echo ""
-echo -e "${YELLOW}[2/4]${NC} 准备目录..."
-mkdir -p "${WRAPPER_DIR}"
-echo -e "      目录: ${WRAPPER_DIR}"
-
-# 3. 提取 gradle-wrapper.jar
-echo ""
-echo -e "${YELLOW}[3/4]${NC} 提取 gradle-wrapper.jar..."
-unzip -j "${GRADLE_ZIP}" '*/gradle-wrapper.jar' -d "${WRAPPER_DIR}/"
-
-if [ -f "${TARGET_JAR}" ]; then
-    SIZE=$(du -h "${TARGET_JAR}" | cut -f1)
-    echo -e "      ${GREEN}成功!${NC} 文件大小: ${SIZE}"
+echo "🔧 [3/4] 检查 gradlew..."
+if [ -x "$PROJECT_DIR/gradlew" ]; then
+    echo "   ✅ 已存在且可执行"
 else
-    echo -e "      ${RED}提取失败!${NC} 请检查 zip 文件完整性"
-    exit 1
+    echo "   ⚠️  不存在或不可执行"
+    if [ -f "$PROJECT_DIR/gradlew" ]; then
+        chmod +x "$PROJECT_DIR/gradlew"
+        echo "   ✅ 已赋予执行权限"
+    else
+        echo "   ❌ gradlew 脚本不存在，请确认项目完整"
+    fi
 fi
 
-# 4. 验证
+# 4. 验证环境
 echo ""
-echo -e "${YELLOW}[4/4]${NC} 验证..."
-if jar tf "${TARGET_JAR}" | grep -q "GradleWrapperMain.class"; then
-    echo -e "      ${GREEN}✓${NC} gradle-wrapper.jar 验证通过"
+echo "🔍 [4/4] 验证环境..."
+echo "   Java:"
+if command -v java >/dev/null 2>&1; then
+    java -version 2>&1 | head -1
 else
-    echo -e "      ${RED}✗${NC} gradle-wrapper.jar 内容异常"
-    exit 1
+    echo "   ❌ Java 未安装（需要 JDK 17+）"
+    echo "   Termux 安装: pkg install openjdk-17"
 fi
 
 echo ""
-echo -e "${GREEN}══════════════════════════════════════════${NC}"
-echo -e "${GREEN}  安装完成! 现在可以运行构建脚本了${NC}"
-echo -e "${GREEN}══════════════════════════════════════════${NC}"
+echo "   Gradle (如有):"
+if command -v gradle >/dev/null 2>&1; then
+    gradle --version 2>&1 | head -3
+else
+    echo "   ℹ️  系统未安装 Gradle（wrapper 会自动下载）"
+fi
+
 echo ""
-echo "  下一步:"
-echo "    ./gradlew assembleRelease    # 构建 Release APK"
-echo "    ./gradlew assembleDebug      # 构建 Debug APK"
-echo "    ./gradlew clean              # 清理构建缓存"
+echo "============================================"
+echo "  安装检查完成！"
 echo ""
+echo "  下一步："
+echo "    ./gradlew --version        # 验证 wrapper"
+echo "    ./gradlew assembleDebug    # 编译 Debug APK"
+echo "    ./gradlew assembleRelease  # 编译 Release APK"
+echo "============================================"
